@@ -27,7 +27,6 @@ static int enable_dma = 2;
 module_param(enable_dma, int, S_IRUGO);
 MODULE_PARM_DESC(enable_dma,
 		 "Enable usage of the DMA (0 = no, 1 = yes, 2 = auto,default)");
-//#define dev_dbg dev_info
 
 static const struct pci_device_id bcm577x5_pci_id_tbl[] = {
 	{
@@ -35,21 +34,6 @@ static const struct pci_device_id bcm577x5_pci_id_tbl[] = {
 	},
 	{},
 };
-
-static const char *tpc_names[] = {
-	"MS_TPC_READ_MG_STATUS",  "MS_TPC_READ_LONG_DATA",
-	"MS_TPC_READ_SHORT_DATA", "MS_TPC_READ_REG",
-	"MS_TPC_READ_QUAD_DATA",  "INVALID",
-	"MS_TPC_GET_INT",	  "MS_TPC_SET_RW_REG_ADRS",
-	"MS_TPC_EX_SET_CMD",	  "MS_TPC_WRITE_QUAD_DATA",
-	"MS_TPC_WRITE_REG",	  "MS_TPC_WRITE_SHORT_DATA",
-	"MS_TPC_WRITE_LONG_DATA", "MS_TPC_SET_CMD",
-};
-
-const char *memstick_debug_get_tpc_name(int tpc)
-{
-	return tpc_names[tpc - 1];
-}
 
 static inline u32 bcm577x5_reg_readl(struct bcm577x5_device *dev, int address)
 {
@@ -83,22 +67,6 @@ static inline void bcm577x5_reg_writeb(struct bcm577x5_device *dev, int address,
 	writeb(value, dev->mmio + address);
 }
 
-static void dump_regs(struct bcm577x5_device *dev)
-{
-	int i;
-	u32 val;
-
-	for (i = 0; i <= 0x4C; i += 4) {
-		val = bcm577x5_reg_readl(dev, i);
-		dev_dbg(&dev->pci_dev->dev, "Rval at %02X: %08X\n", i, val);
-	}
-
-	for (i = 0x180; i <= 0x1B0; i += 4) {
-		val = bcm577x5_reg_readl(dev, i);
-		dev_dbg(&dev->pci_dev->dev, "Rval at %02X: %08X\n", i, val);
-	}
-}
-
 static int bcm577x5_reg_waitb(struct bcm577x5_device *dev, int address, u8 mask,
 			      u8 value, int timeout)
 {
@@ -107,24 +75,6 @@ static int bcm577x5_reg_waitb(struct bcm577x5_device *dev, int address, u8 mask,
 
 	do {
 		reg = bcm577x5_reg_readb(dev, address);
-		if ((reg & mask) == value)
-			return 0;
-
-		cpu_relax();
-
-	} while (time_before(jiffies, wait_time));
-
-	return -ETIME;
-}
-
-static int bcm577x5_reg_waitl(struct bcm577x5_device *dev, int address,
-			      u32 mask, u32 value, int timeout)
-{
-	unsigned long wait_time = jiffies + msecs_to_jiffies(timeout);
-	u32 reg;
-
-	do {
-		reg = bcm577x5_reg_readl(dev, address);
 		if ((reg & mask) == value)
 			return 0;
 
@@ -210,11 +160,11 @@ static int bcm577x5_ms_init(struct bcm577x5_device *dev)
 {
 	/* Reset the controller */
 	bcm577x5_ms_reset(dev, BCM577x5_MS_RESET_ALL);
-	
+
 	/* Power cycle the controller */
 	bcm577x5_ms_power(dev, MEMSTICK_POWER_OFF);
 	bcm577x5_ms_power(dev, MEMSTICK_POWER_ON);
-	
+
 	/* Set clock divider to 2 */
 	bcm577x5_ms_clock(dev, 24000000);
 
@@ -298,12 +248,10 @@ static int bcm577x5_ms_mode(struct bcm577x5_device *dev, int mode)
 	u8 host_control = bcm577x5_reg_readb(dev, BCM577x5_MS_HOST_CONTROL);
 	switch (mode) {
 	case MEMSTICK_SERIAL:
-		dev_dbg(&dev->pci_dev->dev, "Switching to serial");
 		bcm577x5_reg_writeb(dev, BCM577x5_MS_HOST_CONTROL,
 				    host_control & ~BCM577x5_MS_CTRL_4BITBUS);
 		return 0;
 	case MEMSTICK_PAR4:
-		dev_dbg(&dev->pci_dev->dev, "Switching to PAR4");
 		bcm577x5_reg_writeb(dev, BCM577x5_MS_HOST_CONTROL,
 				    host_control | BCM577x5_MS_CTRL_4BITBUS);
 		return 0;
@@ -363,13 +311,6 @@ static int bcm577x5_ms_finish_dma(struct bcm577x5_device *dev)
 					 msecs_to_jiffies(1000)))
 		return -ETIME;
 
-	/*if(bcm577x5_reg_waitl(dev, BCM577x5_MS_DMA_ADDRESS,
-	 0xFFFFFFFF,
-	 dev->dma_handle_aligned + 4096, 1000))
-	 {
-		 return -ETIME;
-	 }*/
-
 	if (dev->req->data_dir == READ) {
 		dma_copy_buffer = dev->dma_buffer_aligned + 4096 - len;
 		dma_sync_single_for_cpu(&dev->pci_dev->dev, dev->dma_handle,
@@ -377,18 +318,6 @@ static int bcm577x5_ms_finish_dma(struct bcm577x5_device *dev)
 		sg_copy_from_buffer(&dev->req->sg,
 				    sg_nents_for_len(&dev->req->sg, len),
 				    dma_copy_buffer, len);
-
-		/*struct sg_mapping_iter miter;
-
-			sg_miter_start(&miter, &dev->req->sg, 1,
-				       SG_MITER_ATOMIC | SG_MITER_TO_SG);
-
-			while (sg_miter_next(&miter)) {
-				memcpy(miter.addr, dma_copy_buffer, miter.length);
-				dma_copy_buffer += miter.length;
-			}
-
-			sg_miter_stop(&miter);*/
 	}
 
 	return 0;
@@ -460,12 +389,6 @@ static int bcm577x5_ms_execute_cmd_short(struct bcm577x5_device *dev, u32 cmd)
 
 	if (!wait_for_completion_timeout(&dev->cmd_done,
 					 msecs_to_jiffies(100))) {
-		dev_dbg(&dev->pci_dev->dev, "Present: %08X\n",
-			bcm577x5_reg_readl(dev, BCM577x5_MS_PRESENT_STATE));
-		dev_dbg(&dev->pci_dev->dev, "Interrupt: %08X\n",
-			bcm577x5_reg_readl(dev, BCM577x5_MS_INT_STATUS));
-		dev_dbg(&dev->pci_dev->dev, "Response: %08X\n",
-			bcm577x5_reg_readl(dev, BCM577x5_MS_RESPONSE));
 		return -ETIME;
 	}
 
@@ -478,13 +401,12 @@ static int bcm577x5_ms_execute_cmd_short(struct bcm577x5_device *dev, u32 cmd)
 		 * The GET_INT command changes the response register,
 		 * so we can detect when it is completed by checking whether
 		 * the response register has changed.
+		 * 
+		 * This may not be completely reliable if the data is the same,
+		 * just assume the command completed if it takes too long.
 		 */
 		bcm577x5_reg_waitl_different(dev, BCM577x5_MS_RESPONSE,
 					     response, 10);
-
-		/*dev_info(&dev->pci_dev->dev, "GET_INT response: %d %08X %08X %08X %08X\n",
-			 len, data[0], response,
-			 bcm577x5_reg_readl(dev, BCM577x5_MS_RESPONSE), bcm577x5_reg_readl(dev, BCM577x5_MS_RESPONSE2));*/
 
 		/* The int reg is placed in the response register */
 		dev->req->int_reg =
@@ -552,12 +474,6 @@ static int bcm577x5_ms_execute_cmd(struct bcm577x5_device *dev)
 	if (!(bcm577x5_reg_readl(dev, BCM577x5_MS_STATUS) &
 	      BCM577x5_MS_STATUS_MS_DETECT))
 		return -ENODEV;
-
-	dev_dbg(&dev->pci_dev->dev,
-		"Executing %s %x long: %d len: %d data: %08X %08X\n",
-		memstick_debug_get_tpc_name(dev->req->tpc), dev->req->tpc,
-		dev->req->long_data, len, *((int *)dev->req->data),
-		*((int *)(&dev->req->data[4])));
 
 	/* Write the length of the transfer */
 	bcm577x5_reg_writel(dev, BCM577x5_MS_BLOCK_SIZE, len);
@@ -706,9 +622,6 @@ static int bcm577x5_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 
 	if (request_irq(dev->irq, &bcm577x5_irq, IRQF_SHARED, DRV_NAME, dev))
 		goto error5;
-
-	//bcm577x5_reg_writel(dev, 0x1E4, 0x9E9E9E9E);
-	//bcm577x5_reg_writel(dev, 0x198, (bcm577x5_reg_readl(dev, 0x198) & ~0x00F000)| 0x3000);
 
 	error = bcm577x5_ms_init(dev);
 	if (error)
